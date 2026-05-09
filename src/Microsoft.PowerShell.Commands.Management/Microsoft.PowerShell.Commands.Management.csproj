@@ -48,6 +48,8 @@
   <ItemGroup>
     <!-- the following package(s) are from https://github.com/dotnet/corefx -->
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="11.0.0-preview.3.26207.106" />
+    <!-- D-Bus protocol library for Linux *-Service cmdlets (ServiceUnix.cs). No codegen, NativeAOT-compatible, MIT. -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.93.0" Condition="'$(IsWindows)' != 'true'" />
   </ItemGroup>
 
 </Project>

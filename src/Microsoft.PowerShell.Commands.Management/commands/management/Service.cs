@@ -2923,24 +2923,8 @@ namespace Microsoft.PowerShell.Commands
     }
     #endregion NativeMethods
 
-    #region ServiceStartupType
-    /// <summary>
-    /// Enum for usage with StartupType. Automatic, Manual and Disabled index matched from System.ServiceProcess.ServiceStartMode
-    /// </summary>
-    public enum ServiceStartupType
-    {
-        /// <summary>Invalid service</summary>
-        InvalidValue = -1,
-        /// <summary>Automatic service</summary>
-        Automatic = 2,
-        /// <summary>Manual service</summary>
-        Manual = 3,
-        /// <summary>Disabled service</summary>
-        Disabled = 4,
-        /// <summary>Automatic (Delayed Start) service</summary>
-        AutomaticDelayedStart = 10
-    }
-    #endregion ServiceStartupType
+    // ServiceStartupType enum is defined in ServiceShared.cs (no platform guard)
+    // so it is available on both Windows and Linux.
 }
 
 #endif // Not built on Unix
