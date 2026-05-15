@@ -469,7 +469,10 @@ namespace System.Management.Automation
 
         private static string BuildMessage(string commandName)
         {
-            return StringUtil.Format(DiscoveryExceptions.RequiresElevation, commandName);
+            string resourceStr = Platform.IsWindows
+                ? DiscoveryExceptions.RequiresElevation
+                : DiscoveryExceptions.RequiresElevationUnix;
+            return StringUtil.Format(resourceStr, commandName);
         }
 
         #endregion Private

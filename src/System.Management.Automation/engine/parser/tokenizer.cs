@@ -1993,6 +1993,7 @@ namespace System.Management.Automation.Language
         private const string assemblyToken = "assembly";
         private const string modulesToken = "modules";
         private const string elevationToken = "runasadministrator";
+        private const string elevatedToken = "runaselevated";
 
         private void HandleRequiresParameter(CommandParameterAst parameter,
                                              ReadOnlyCollection<CommandElementAst> commandElements,
@@ -2009,7 +2010,8 @@ namespace System.Management.Automation.Language
         {
             Ast argumentAst = parameter.Argument ?? (index + 1 < commandElements.Count ? commandElements[++index] : null);
 
-            if (elevationToken.StartsWith(parameter.ParameterName, StringComparison.OrdinalIgnoreCase))
+            if (elevationToken.StartsWith(parameter.ParameterName, StringComparison.OrdinalIgnoreCase)
+                || elevatedToken.StartsWith(parameter.ParameterName, StringComparison.OrdinalIgnoreCase))
             {
                 requiresElevation = true;
                 if (argumentAst != null)

@@ -6112,8 +6112,9 @@ namespace System.Management.Automation
             int cursorIndex = context.CursorPosition.ColumnNumber - 1;
             string lineToCursor = context.CursorPosition.Line.Substring(0, cursorIndex);
 
-            // RunAsAdministrator must be the last parameter in a Requires statement so no completion if the cursor is after the parameter.
-            if (lineToCursor.Contains(" -RunAsAdministrator", StringComparison.OrdinalIgnoreCase))
+            // RunAsAdministrator and RunAsElevated must be the last parameter in a Requires statement so no completion if the cursor is after the parameter.
+            if (lineToCursor.Contains(" -RunAsAdministrator", StringComparison.OrdinalIgnoreCase)
+                || lineToCursor.Contains(" -RunAsElevated", StringComparison.OrdinalIgnoreCase))
             {
                 return results;
             }
@@ -6271,6 +6272,7 @@ namespace System.Management.Automation
             "Modules",
             "PSEdition",
             "RunAsAdministrator",
+            "RunAsElevated",
             "Version"
         };
 
@@ -6279,6 +6281,7 @@ namespace System.Management.Automation
             "Modules" => TabCompletionStrings.RequiresModulesParameterDescription,
             "PSEdition" => TabCompletionStrings.RequiresPSEditionParameterDescription,
             "RunAsAdministrator" => TabCompletionStrings.RequiresRunAsAdministratorParameterDescription,
+            "RunAsElevated" => TabCompletionStrings.RequiresRunAsElevatedParameterDescription,
             "Version" => TabCompletionStrings.RequiresVersionParameterDescription,
             _ => string.Empty
         };

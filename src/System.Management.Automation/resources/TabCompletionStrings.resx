@@ -452,6 +452,11 @@ Valid values are "Core" and "Desktop"</value>
 Specifies that PowerShell must be running as administrator on Windows.
 This must be the last parameter on the #requires statement line.</value>
   </data>
+  <data name="RequiresRunAsElevatedParameterDescription" xml:space="preserve">
+    <value>[switch]
+Specifies that PowerShell must be running with elevated privileges (Administrator on Windows, root on Linux).
+This must be the last parameter on the #requires statement line.</value>
+  </data>
   <data name="RequiresVersionParameterDescription" xml:space="preserve">
     <value>[version]
 Specifies the minimum version of PowerShell that the script requires.</value>

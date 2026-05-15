@@ -764,6 +764,7 @@ namespace System.Management.Automation.Language
         /// <summary>
         /// Specifies if this script requires elevated privileges, specified like:
         ///     <code>#requires -RunAsAdministrator</code>
+        ///     <code>#requires -RunAsElevated</code>
         /// If nothing is specified, this property is false.
         /// </summary>
         public bool IsElevationRequired { get; internal set; }
