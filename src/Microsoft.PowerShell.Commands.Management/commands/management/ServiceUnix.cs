@@ -307,6 +307,84 @@ namespace Microsoft.PowerShell.Commands
             await conn.CallMethodAsync(msgDisable, static (Message m, object? _) => 0);
         }
 
+        // ── DaemonReload ──────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Calls <c>Reload</c> on the systemd manager (equivalent to
+        /// <c>systemctl daemon-reload</c>).
+        /// </summary>
+        internal static void DaemonReload()
+        {
+            using var conn = OpenSystem();
+            var msg = BuildCall(conn, "Reload");
+            conn.CallMethodAsync(msg, static (Message m, object? _) => 0)
+                .GetAwaiter().GetResult();
+        }
+
+        // ── Unit file management ──────────────────────────────────────────────
+
+        /// <summary>
+        /// Write a .service unit file to the system or user unit directory.
+        /// </summary>
+        internal static void WriteUnitFile(string unitName, string description, string execStart)
+        {
+            string unitDir = IsNonRoot() ? GetUserUnitDir() : "/etc/systemd/system/";
+            System.IO.Directory.CreateDirectory(unitDir);
+            string unitPath = System.IO.Path.Combine(unitDir, unitName);
+            var lines = new[]
+            {
+                "[Unit]",
+                $"Description={description}",
+                "",
+                "[Service]",
+                $"ExecStart={execStart}",
+                "Restart=no",
+                "",
+                "[Install]",
+                "WantedBy=multi-user.target"
+            };
+            System.IO.File.WriteAllLines(unitPath, lines);
+        }
+
+        /// <summary>
+        /// Delete a .service unit file from the system or user unit directory.
+        /// Does nothing if the file does not exist.
+        /// </summary>
+        internal static void RemoveUnitFile(string unitName)
+        {
+            string unitDir = IsNonRoot() ? GetUserUnitDir() : "/etc/systemd/system/";
+            string unitPath = System.IO.Path.Combine(unitDir, unitName);
+            if (System.IO.File.Exists(unitPath))
+                System.IO.File.Delete(unitPath);
+        }
+
+        private static bool IsNonRoot()
+        {
+            try
+            {
+                using var proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "id",
+                    Arguments = "-u",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false
+                })!;
+                var output = proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit();
+                return !output.Trim().Equals("0");
+            }
+            catch { return true; }
+        }
+
+        private static string GetUserUnitDir()
+        {
+            string configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME")
+                ?? System.IO.Path.Combine(
+                    Environment.GetEnvironmentVariable("HOME") ?? "/root",
+                    ".config");
+            return System.IO.Path.Combine(configHome, "systemd", "user");
+        }
+
         // ── Message builders ─────────────────────────────────────────────────
 
         /// <summary>Build a no-argument Manager method call.</summary>
@@ -449,17 +527,16 @@ namespace Microsoft.PowerShell.Commands
         /// <inheritdoc/>
         protected override void ProcessRecord()
         {
-            IEnumerable<LinuxServiceInfo> services;
+            IEnumerable<string> unitNames;
             if (ParameterSetName == "InputObject" && InputObject is not null)
-                services = SystemdHelper.GetServices(
-                    System.Array.ConvertAll(InputObject, s => s.Name));
+                unitNames = System.Array.ConvertAll(InputObject, s => s.Name);
             else if (Name is not null)
-                services = SystemdHelper.GetServices(Name);
+                unitNames = System.Array.ConvertAll(Name, SystemdHelper.ResolveUnitName);
             else
                 return;
 
-            foreach (var svc in services)
-                OperateOnService(svc.Name);
+            foreach (var name in unitNames)
+                OperateOnService(name);
         }
 
         /// <summary>Perform the unit-level operation.</summary>
@@ -701,6 +778,151 @@ namespace Microsoft.PowerShell.Commands
     }
 
     #endregion SetServiceCommand
+
+    #region NewServiceCommand
+
+    /// <summary>
+    /// Linux implementation of <c>New-Service</c>.  Writes a systemd unit file
+    /// to <c>/etc/systemd/system/</c> (or the user unit directory),
+    /// runs <c>daemon-reload</c>, and optionally enables the unit.
+    /// Requires root or polkit authorisation for system services.
+    /// </summary>
+    [Cmdlet(VerbsCommon.New, "Service", SupportsShouldProcess = true,
+        HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097056",
+        RemotingCapability = RemotingCapability.SupportedByCommand)]
+    [OutputType(typeof(LinuxServiceInfo))]
+    public sealed class NewServiceCommand : PSCmdlet
+    {
+        /// <summary>Name of the service to create.</summary>
+        [Parameter(Mandatory = true, Position = 0)]
+        [ValidateNotNullOrEmpty]
+        public string Name { get; set; } = string.Empty;
+
+        /// <summary>Path to the executable (the <c>ExecStart</c> value).</summary>
+        [Parameter(Mandatory = true)]
+        public string BinaryPathName { get; set; } = string.Empty;
+
+        /// <summary>Human-readable description for the unit file.</summary>
+        [Parameter]
+        public string Description { get; set; } = string.Empty;
+
+        /// <summary>Startup type (enable behaviour). Defaults to <c>Manual</c>.</summary>
+        [Parameter]
+        public ServiceStartupType StartupType { get; set; } = ServiceStartupType.Manual;
+
+        /// <inheritdoc/>
+        protected override void ProcessRecord()
+        {
+            string unitName = SystemdHelper.ResolveUnitName(Name);
+
+            if (!ShouldProcess(unitName, "Create systemd service unit")) return;
+
+            try
+            {
+                SystemdHelper.WriteUnitFile(unitName, Description, BinaryPathName);
+            }
+            catch (Exception ex)
+            {
+                WriteError(new ErrorRecord(
+                    new InvalidOperationException(
+                        $"Failed to create unit file for {unitName}: {ex.Message}", ex),
+                    "UnitFileCreateFailed", ErrorCategory.WriteError, unitName));
+                return;
+            }
+
+            try
+            {
+                SystemdHelper.DaemonReload();
+            }
+            catch (Exception ex)
+            {
+                WriteError(new ErrorRecord(
+                    new InvalidOperationException(
+                        $"Created unit file but daemon-reload failed: {ex.Message}", ex),
+                    "DaemonReloadFailed", ErrorCategory.OperationStopped, unitName));
+                return;
+            }
+
+            if (StartupType == ServiceStartupType.Automatic)
+            {
+                try { SystemdHelper.EnableUnits(new[] { unitName }); }
+                catch (Exception ex)
+                {
+                    WriteError(new ErrorRecord(
+                        new InvalidOperationException(
+                            $"Created unit file but enable failed: {ex.Message}", ex),
+                        "EnableFailed", ErrorCategory.OperationStopped, unitName));
+                }
+            }
+
+            WriteObject(new LinuxServiceInfo
+            {
+                Name        = unitName,
+                DisplayName = string.IsNullOrEmpty(Description) ? Name : Description,
+                Status      = ServiceControllerStatus.Stopped,
+                StartType   = StartupType,
+                ActiveState = "inactive",
+                SubState    = "dead",
+            });
+        }
+    }
+
+    #endregion NewServiceCommand
+
+    #region RemoveServiceCommand
+
+    /// <summary>
+    /// Linux implementation of <c>Remove-Service</c>.  Stops, disables, deletes
+    /// the systemd unit file, and runs <c>daemon-reload</c>.
+    /// Requires root or polkit authorisation for system services.
+    /// </summary>
+    [Cmdlet(VerbsCommon.Remove, "Service", SupportsShouldProcess = true,
+        ConfirmImpact = ConfirmImpact.High,
+        HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097052",
+        RemotingCapability = RemotingCapability.SupportedByCommand)]
+    public sealed class RemoveServiceCommand : PSCmdlet
+    {
+        /// <summary>Name of the service to remove.</summary>
+        [Parameter(Mandatory = true, Position = 0,
+            ValueFromPipeline = true, ValueFromPipelineByPropertyName = true)]
+        [ValidateNotNullOrEmpty]
+        public string Name { get; set; } = string.Empty;
+
+        /// <inheritdoc/>
+        protected override void ProcessRecord()
+        {
+            string unitName = SystemdHelper.ResolveUnitName(Name);
+
+            if (!ShouldProcess(unitName, "Stop, disable, and delete systemd service unit")) return;
+
+            try { SystemdHelper.StopUnit(unitName); }
+            catch (Exception) { }
+
+            try { SystemdHelper.DisableUnits(new[] { unitName }); }
+            catch (Exception) { }
+
+            try { SystemdHelper.RemoveUnitFile(unitName); }
+            catch (Exception ex)
+            {
+                WriteError(new ErrorRecord(
+                    new InvalidOperationException(
+                        $"Failed to remove unit file for {unitName}: {ex.Message}", ex),
+                    "UnitFileRemoveFailed", ErrorCategory.WriteError, unitName));
+                return;
+            }
+
+            try { SystemdHelper.DaemonReload(); }
+            catch (Exception ex)
+            {
+                WriteError(new ErrorRecord(
+                    new InvalidOperationException(
+                        $"Removed unit file but daemon-reload failed: {ex.Message}", ex),
+                    "DaemonReloadFailed", ErrorCategory.OperationStopped, unitName));
+            }
+        }
+    }
+
+    #endregion RemoveServiceCommand
 }
 
 #endif
