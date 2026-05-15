@@ -114,6 +114,37 @@ Describe "Linux Service cmdlet tests" -Tags "CI","RequireAdminOnLinux" {
     }
 
     # -------------------------------------------------------------------------
+    # -WhatIf tests — ShouldProcess must work without D-Bus or root
+    # -------------------------------------------------------------------------
+
+    Context "-WhatIf safety" {
+
+        It "Start-Service -WhatIf does not throw" {
+            { Start-Service -Name $script:knownService -WhatIf } | Should -Not -Throw
+        }
+
+        It "Stop-Service -WhatIf does not throw" {
+            { Stop-Service -Name $script:knownService -WhatIf } | Should -Not -Throw
+        }
+
+        It "Restart-Service -WhatIf does not throw" {
+            { Restart-Service -Name $script:knownService -WhatIf } | Should -Not -Throw
+        }
+
+        It "Set-Service -WhatIf does not throw" {
+            { Set-Service -Name $script:knownService -StartupType Manual -WhatIf } | Should -Not -Throw
+        }
+
+        It "New-Service -WhatIf does not throw" {
+            { New-Service -Name pester-test -BinaryPathName '/usr/bin/true' -WhatIf } | Should -Not -Throw
+        }
+
+        It "Remove-Service -WhatIf does not throw" {
+            { Remove-Service -Name pester-test -WhatIf } | Should -Not -Throw
+        }
+    }
+
+    # -------------------------------------------------------------------------
     # Start/Stop/Restart-Service and Set-Service
     # Require root (RequireAdminOnLinux tag) — skipped in unprivileged CI runs
     # -------------------------------------------------------------------------
@@ -212,6 +243,78 @@ RemainAfterExit=yes
             Get-Service -Name $script:testUnit | Start-Service
             $svc = Get-Service -Name $script:testUnit
             $svc.Status | Should -BeExactly ([System.ServiceProcess.ServiceControllerStatus]::Running)
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    # New-Service / Remove-Service round-trip
+    # Require root — writes to /etc/systemd/system/
+    # -------------------------------------------------------------------------
+
+    Context "New-Service / Remove-Service (requires root)" -Skip:(-not (whoami) -eq 'root') {
+
+        BeforeAll {
+            $script:newSvcUnit = 'pester-native-svc.service'
+            $script:newSvcName = 'pester-native-svc'
+        }
+
+        AfterAll {
+            # Clean up any leftover unit from a failed test
+            & systemctl stop  $script:newSvcUnit 2>$null
+            & systemctl disable $script:newSvcUnit 2>$null
+            Remove-Item "/etc/systemd/system/$($script:newSvcUnit)" -Force -ErrorAction SilentlyContinue
+            & systemctl daemon-reload
+        }
+
+        It "New-Service creates a unit file" {
+            New-Service -Name $script:newSvcName -BinaryPathName '/usr/bin/true' -Description 'Pester native service test'
+            $svc = Get-Service -Name $script:newSvcUnit -ErrorAction SilentlyContinue
+            $svc | Should -Not -BeNullOrEmpty
+            $svc.Name | Should -BeExactly $script:newSvcUnit
+            $svc.DisplayName | Should -BeExactly 'Pester native service test'
+        }
+
+        It "New-Service returns the service object" {
+            $svc = New-Service -Name 'pester-native-rt' -BinaryPathName '/usr/bin/true' -Description 'Pester round-trip'
+            $svc | Should -Not -BeNullOrEmpty
+            $svc.GetType().Name | Should -BeExactly 'LinuxServiceInfo'
+            $svc.Status | Should -BeExactly ([System.ServiceProcess.ServiceControllerStatus]::Stopped)
+            # Clean up
+            & systemctl stop 'pester-native-rt.service' 2>$null
+            & systemctl disable 'pester-native-rt.service' 2>$null
+            Remove-Item "/etc/systemd/system/pester-native-rt.service" -Force -ErrorAction SilentlyContinue
+            & systemctl daemon-reload
+        }
+
+        It "New-Service -StartupType Automatic enables the unit" {
+            New-Service -Name 'pester-native-auto' -BinaryPathName '/usr/bin/true' -StartupType Automatic
+            $svc = Get-Service -Name 'pester-native-auto.service'
+            $svc.StartType | Should -BeExactly ([Microsoft.PowerShell.Commands.ServiceStartupType]::Automatic)
+            # Clean up
+            & systemctl stop 'pester-native-auto.service' 2>$null
+            & systemctl disable 'pester-native-auto.service' 2>$null
+            Remove-Item "/etc/systemd/system/pester-native-auto.service" -Force -ErrorAction SilentlyContinue
+            & systemctl daemon-reload
+        }
+
+        It "Remove-Service stops, disables, and deletes the unit file" {
+            # Recreate the service for Remove-Service to act on
+            New-Service -Name $script:newSvcName -BinaryPathName '/usr/bin/true'
+            $svc = Get-Service -Name $script:newSvcUnit -ErrorAction SilentlyContinue
+            $svc | Should -Not -BeNullOrEmpty
+
+            Remove-Service -Name $script:newSvcName
+            $svc = Get-Service -Name $script:newSvcUnit -ErrorAction SilentlyContinue
+            $svc | Should -BeNullOrEmpty
+
+            Test-Path "/etc/systemd/system/$($script:newSvcUnit)" | Should -BeFalse
+        }
+
+        It "Remove-Service accepts pipeline input" {
+            New-Service -Name 'pester-native-pipe' -BinaryPathName '/usr/bin/true'
+            Get-Service -Name 'pester-native-pipe.service' | Remove-Service
+            $svc = Get-Service -Name 'pester-native-pipe.service' -ErrorAction SilentlyContinue
+            $svc | Should -BeNullOrEmpty
         }
     }
 }
