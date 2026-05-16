@@ -290,7 +290,15 @@ namespace Microsoft.PowerShell.Commands
             using var conn = OpenSystem();
             var msgEnable = BuildEnableMessage(conn, unitNames, runtime: false, force: false);
             // Returns (b carriesInstall, a(sss) changes) — discard
-            await conn.CallMethodAsync(msgEnable, static (Message m, object? _) => 0);
+            try
+            {
+                await conn.CallMethodAsync(msgEnable, static (Message m, object? _) => 0).ConfigureAwait(false);
+            }
+            catch (DBusExceptionBase ex) when (ex.Message.Contains("InteractiveAuthorizationRequired"))
+            {
+                throw new InvalidOperationException(
+                    "EnableUnitFiles failed: root privileges are required. Use 'sudo pwsh'.", ex);
+            }
         }
 
         /// <summary>
@@ -304,7 +312,15 @@ namespace Microsoft.PowerShell.Commands
         {
             using var conn = OpenSystem();
             var msgDisable = BuildDisableMessage(conn, unitNames, runtime: false);
-            await conn.CallMethodAsync(msgDisable, static (Message m, object? _) => 0);
+            try
+            {
+                await conn.CallMethodAsync(msgDisable, static (Message m, object? _) => 0).ConfigureAwait(false);
+            }
+            catch (DBusExceptionBase ex) when (ex.Message.Contains("InteractiveAuthorizationRequired"))
+            {
+                throw new InvalidOperationException(
+                    "DisableUnitFiles failed: root privileges are required. Use 'sudo pwsh'.", ex);
+            }
         }
 
         // ── DaemonReload ──────────────────────────────────────────────────────
@@ -317,8 +333,16 @@ namespace Microsoft.PowerShell.Commands
         {
             using var conn = OpenSystem();
             var msg = BuildCall(conn, "Reload");
-            conn.CallMethodAsync(msg, static (Message m, object? _) => 0)
-                .GetAwaiter().GetResult();
+            try
+            {
+                conn.CallMethodAsync(msg, static (Message m, object? _) => 0)
+                    .GetAwaiter().GetResult();
+            }
+            catch (DBusExceptionBase ex) when (ex.Message.Contains("InteractiveAuthorizationRequired"))
+            {
+                throw new InvalidOperationException(
+                    "DaemonReload failed: root privileges are required. Use 'sudo pwsh'.", ex);
+            }
         }
 
         // ── Unit file management ──────────────────────────────────────────────
@@ -729,6 +753,14 @@ namespace Microsoft.PowerShell.Commands
 
             if (!ShouldProcess(unitName, "Set")) return;
 
+            if (!Utils.IsAdministrator())
+            {
+                WriteError(new ErrorRecord(
+                    new PSSecurityException($"{MyInvocation.MyCommand.Name} requires root privileges."),
+                    "ElevationRequired", ErrorCategory.PermissionDenied, unitName));
+                return;
+            }
+
             // ── Apply startup type ────────────────────────────────────────────
             if (StartupType != ServiceStartupType.InvalidValue)
             {
@@ -817,6 +849,14 @@ namespace Microsoft.PowerShell.Commands
 
             if (!ShouldProcess(unitName, "Create systemd service unit")) return;
 
+            if (!Utils.IsAdministrator())
+            {
+                WriteError(new ErrorRecord(
+                    new PSSecurityException($"{MyInvocation.MyCommand.Name} requires root privileges."),
+                    "ElevationRequired", ErrorCategory.PermissionDenied, unitName));
+                return;
+            }
+
             try
             {
                 SystemdHelper.WriteUnitFile(unitName, Description, BinaryPathName);
@@ -894,6 +934,14 @@ namespace Microsoft.PowerShell.Commands
             string unitName = SystemdHelper.ResolveUnitName(Name);
 
             if (!ShouldProcess(unitName, "Stop, disable, and delete systemd service unit")) return;
+
+            if (!Utils.IsAdministrator())
+            {
+                WriteError(new ErrorRecord(
+                    new PSSecurityException($"{MyInvocation.MyCommand.Name} requires root privileges."),
+                    "ElevationRequired", ErrorCategory.PermissionDenied, unitName));
+                return;
+            }
 
             try { SystemdHelper.StopUnit(unitName); }
             catch (Exception) { }
