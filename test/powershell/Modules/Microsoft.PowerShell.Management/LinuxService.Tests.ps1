@@ -5,7 +5,7 @@
 # These tests are skipped on Windows and macOS; they require systemd to be
 # running (i.e. a full Linux distro — not Alpine/musl with OpenRC).
 
-Describe "Linux Service cmdlet tests" -Tags "CI","RequireAdminOnLinux" {
+Describe "Linux Service cmdlet tests" -Tags "CI", "RequireAdminOnLinux" {
 
     BeforeAll {
         $originalDefaultParameterValues = $PSDefaultParameterValues.Clone()
@@ -13,7 +13,8 @@ Describe "Linux Service cmdlet tests" -Tags "CI","RequireAdminOnLinux" {
         # Skip entirely on non-Linux, or if systemd is not pid 1
         if (-not $IsLinux) {
             $PSDefaultParameterValues["it:skip"] = $true
-        } else {
+        }
+        else {
             # Check systemd is the init — if not (e.g. Alpine/OpenRC) skip too
             $init = (Get-Item /proc/1/exe -ErrorAction SilentlyContinue)?.Target
             if ($init -notmatch 'systemd') {
@@ -42,10 +43,10 @@ Describe "Linux Service cmdlet tests" -Tags "CI","RequireAdminOnLinux" {
             $svcs | Should -Not -BeNullOrEmpty
         }
 
-        It "Returns a LinuxServiceInfo object" {
+        It "Returns a LinuxServiceController object" {
             $svc = Get-Service -Name $script:knownService | Select-Object -First 1
             $svc | Should -Not -BeNullOrEmpty
-            $svc.GetType().Name | Should -BeExactly 'LinuxServiceInfo'
+            $svc.GetType().Name | Should -BeExactly 'LinuxServiceController'
         }
 
         It "Result has expected properties" {
@@ -73,8 +74,8 @@ Describe "Linux Service cmdlet tests" -Tags "CI","RequireAdminOnLinux" {
             $result | Should -BeNullOrEmpty
         }
 
-        It "Accepts pipeline input of LinuxServiceInfo objects" {
-            $svc  = Get-Service -Name $script:knownService | Select-Object -First 1
+        It "Accepts pipeline input of LinuxServiceController objects" {
+            $svc = Get-Service -Name $script:knownService | Select-Object -First 1
             $svc2 = $svc | Get-Service
             $svc2.Name | Should -BeExactly $svc.Name
         }
@@ -182,11 +183,11 @@ RemainAfterExit=yes
             $svc.Status | Should -BeExactly ([System.ServiceProcess.ServiceControllerStatus]::Running)
         }
 
-        It "Start-Service -PassThru returns updated LinuxServiceInfo" {
+        It "Start-Service -PassThru returns updated LinuxServiceController" {
             & systemctl stop $script:testUnit 2>$null
             $svc = Start-Service -Name $script:testUnit -PassThru
             $svc | Should -Not -BeNullOrEmpty
-            $svc.GetType().Name | Should -BeExactly 'LinuxServiceInfo'
+            $svc.GetType().Name | Should -BeExactly 'LinuxServiceController'
             $svc.Status | Should -BeExactly ([System.ServiceProcess.ServiceControllerStatus]::Running)
         }
 
@@ -232,10 +233,10 @@ RemainAfterExit=yes
             $svc.Status | Should -BeExactly ([System.ServiceProcess.ServiceControllerStatus]::Stopped)
         }
 
-        It "Set-Service -PassThru returns updated LinuxServiceInfo" {
+        It "Set-Service -PassThru returns updated LinuxServiceController" {
             $svc = Set-Service -Name $script:testUnit -Status Running -PassThru
             $svc | Should -Not -BeNullOrEmpty
-            $svc.GetType().Name | Should -BeExactly 'LinuxServiceInfo'
+            $svc.GetType().Name | Should -BeExactly 'LinuxServiceController'
         }
 
         It "Pipeline input works for Start-Service" {
@@ -277,7 +278,7 @@ RemainAfterExit=yes
         It "New-Service returns the service object" {
             $svc = New-Service -Name 'pester-native-rt' -BinaryPathName '/usr/bin/true' -Description 'Pester round-trip'
             $svc | Should -Not -BeNullOrEmpty
-            $svc.GetType().Name | Should -BeExactly 'LinuxServiceInfo'
+            $svc.GetType().Name | Should -BeExactly 'LinuxServiceController'
             $svc.Status | Should -BeExactly ([System.ServiceProcess.ServiceControllerStatus]::Stopped)
             # Clean up
             & systemctl stop 'pester-native-rt.service' 2>$null

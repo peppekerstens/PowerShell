@@ -43,10 +43,15 @@ namespace Microsoft.PowerShell.Commands
     /// <see cref="System.ServiceProcess.ServiceController"/> so that scripts
     /// that access <c>$svc.Status</c>, <c>$svc.Name</c>, etc. work unchanged.
     /// </summary>
-    public sealed class LinuxServiceInfo
+    public sealed class LinuxServiceController
     {
         /// <summary>The systemd unit name, e.g. <c>sshd.service</c>.</summary>
-        public string Name { get; internal set; } = string.Empty;
+        public string ServiceName { get; internal set; } = string.Empty;
+
+        /// <summary>The short name of the service (ServiceName without the .service suffix).</summary>
+        public string Name => ServiceName.EndsWith(".service", StringComparison.Ordinal)
+            ? ServiceName.Substring(0, ServiceName.Length - 8)
+            : ServiceName;
 
         /// <summary>Human-readable description from the unit file.</summary>
         public string DisplayName { get; internal set; } = string.Empty;
@@ -67,8 +72,8 @@ namespace Microsoft.PowerShell.Commands
             => activeState switch
             {
                 "active"      => subState == "running"
-                                    ? ServiceControllerStatus.Running
-                                    : ServiceControllerStatus.StartPending,
+                                     ? ServiceControllerStatus.Running
+                                     : ServiceControllerStatus.StartPending,
                 "activating"  => ServiceControllerStatus.StartPending,
                 "deactivating"=> ServiceControllerStatus.StopPending,
                 "reloading"   => ServiceControllerStatus.ContinuePending,
@@ -121,16 +126,16 @@ namespace Microsoft.PowerShell.Commands
         /// Return all service units, optionally filtered by name patterns.
         /// Reads <c>ListUnits()</c> + <c>ListUnitFiles()</c> over D-Bus.
         /// </summary>
-        internal static IEnumerable<LinuxServiceInfo> GetServices(string[]? namePatterns)
+        internal static IEnumerable<LinuxServiceController> GetServices(string[]? namePatterns)
             => GetServicesAsync(namePatterns).GetAwaiter().GetResult();
 
-        private static async Task<List<LinuxServiceInfo>> GetServicesAsync(string[]? namePatterns)
+        private static async Task<List<LinuxServiceController>> GetServicesAsync(string[]? namePatterns)
         {
             using var conn = OpenSystem();
 
             // ── 1. ListUnits — currently loaded/active units ─────────────────
             // Method signature: ListUnits() → a(ssssssouso)
-            var activeUnits = new Dictionary<string, LinuxServiceInfo>(StringComparer.OrdinalIgnoreCase);
+            var activeUnits = new Dictionary<string, LinuxServiceController>(StringComparer.OrdinalIgnoreCase);
 
             var msg1 = BuildCall(conn, "ListUnits");
             {
@@ -160,15 +165,15 @@ namespace Microsoft.PowerShell.Commands
 
                 foreach (var (name, desc, active, sub) in reply)
                 {
-                    activeUnits[name] = new LinuxServiceInfo
-                    {
-                        Name        = name,
-                        DisplayName = desc,
-                        ActiveState = active,
-                        SubState    = sub,
-                        Status      = LinuxServiceInfo.MapStatus(active, sub),
-                        StartType   = ServiceStartupType.Manual, // overwritten below
-                    };
+activeUnits[name] = new LinuxServiceController
+                {
+                    ServiceName    = name,
+                    DisplayName   = desc,
+                    ActiveState   = active,
+                    SubState      = sub,
+                    Status        = LinuxServiceController.MapStatus(active, sub),
+                    StartType     = ServiceStartupType.Manual, // overwritten below
+                };
                 }
             }
 
@@ -196,7 +201,7 @@ namespace Microsoft.PowerShell.Commands
                 {
                     // file may be a full path like /usr/lib/systemd/system/sshd.service
                     string unitName = System.IO.Path.GetFileName(file);
-                    var startType = LinuxServiceInfo.MapStartupType(state);
+                    var startType = LinuxServiceController.MapStartupType(state);
                     if (activeUnits.TryGetValue(unitName, out var existing))
                     {
                         existing.StartType = startType;
@@ -204,21 +209,21 @@ namespace Microsoft.PowerShell.Commands
                     else
                     {
                         // Unit exists but is not currently loaded — show as stopped
-                        activeUnits[unitName] = new LinuxServiceInfo
-                        {
-                            Name        = unitName,
-                            DisplayName = unitName,
-                            ActiveState = "inactive",
-                            SubState    = "dead",
-                            Status      = ServiceControllerStatus.Stopped,
-                            StartType   = startType,
-                        };
+activeUnits[unitName] = new LinuxServiceController
+                    {
+                        ServiceName    = unitName,
+                        DisplayName   = unitName,
+                        ActiveState   = "inactive",
+                        SubState      = "dead",
+                        Status        = ServiceControllerStatus.Stopped,
+                        StartType     = startType,
+                    };
                     }
                 }
             }
 
             // ── 3. Apply name filter ─────────────────────────────────────────
-            var result = new List<LinuxServiceInfo>();
+            var result = new List<LinuxServiceController>();
             foreach (var svc in activeUnits.Values)
             {
                 if (MatchesPatterns(svc, namePatterns))
@@ -227,7 +232,7 @@ namespace Microsoft.PowerShell.Commands
             return result;
         }
 
-        private static bool MatchesPatterns(LinuxServiceInfo svc, string[]? patterns)
+        private static bool MatchesPatterns(LinuxServiceController svc, string[]? patterns)
         {
             if (patterns is null || patterns.Length == 0) return true;
             foreach (var pattern in patterns)
@@ -235,15 +240,15 @@ namespace Microsoft.PowerShell.Commands
                 if (WildcardPattern.ContainsWildcardCharacters(pattern))
                 {
                     var wp = new WildcardPattern(pattern, WildcardOptions.IgnoreCase);
-                    if (wp.IsMatch(svc.Name) || wp.IsMatch(svc.DisplayName))
+                    if (wp.IsMatch(svc.ServiceName) || wp.IsMatch(svc.DisplayName))
                         return true;
                 }
                 else
                 {
                     string bare = pattern.EndsWith(".service", StringComparison.OrdinalIgnoreCase)
                         ? pattern : pattern + ".service";
-                    if (svc.Name.Equals(pattern, StringComparison.OrdinalIgnoreCase)
-                        || svc.Name.Equals(bare,    StringComparison.OrdinalIgnoreCase))
+                    if (svc.ServiceName.Equals(pattern, StringComparison.OrdinalIgnoreCase)
+                    || svc.ServiceName.Equals(bare,    StringComparison.OrdinalIgnoreCase))
                         return true;
                 }
             }
@@ -482,7 +487,7 @@ namespace Microsoft.PowerShell.Commands
     [Cmdlet(VerbsCommon.Get, "Service", DefaultParameterSetName = "Default",
         HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2096496",
         RemotingCapability = RemotingCapability.SupportedByCommand)]
-    [OutputType(typeof(LinuxServiceInfo))]
+    [OutputType(typeof(LinuxServiceController))]
     public sealed class GetServiceCommand : PSCmdlet
     {
         /// <summary>Service name(s). Wildcards accepted.</summary>
@@ -492,9 +497,9 @@ namespace Microsoft.PowerShell.Commands
         [Alias("ServiceName")]
         public string[]? Name { get; set; }
 
-        /// <summary>Pipeline input of existing <see cref="LinuxServiceInfo"/> objects.</summary>
+        /// <summary>Pipeline input of existing <see cref="LinuxServiceController"/> objects.</summary>
         [Parameter(ParameterSetName = "InputObject", ValueFromPipeline = true)]
-        public LinuxServiceInfo[]? InputObject { get; set; }
+        public LinuxServiceController[]? InputObject { get; set; }
 
         private readonly List<string> _names = new();
 
@@ -542,7 +547,7 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>Pipeline input of service objects.</summary>
         [Parameter(Mandatory = true, ParameterSetName = "InputObject",
             ValueFromPipeline = true)]
-        public LinuxServiceInfo[]? InputObject { get; set; }
+        public LinuxServiceController[]? InputObject { get; set; }
 
         /// <summary>Emit the updated service object after the operation.</summary>
         [Parameter]
@@ -566,7 +571,7 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>Perform the unit-level operation.</summary>
         protected abstract void OperateOnService(string unitName);
 
-        /// <summary>Re-read and emit a fresh <see cref="LinuxServiceInfo"/>.</summary>
+        /// <summary>Re-read and emit a fresh <see cref="LinuxServiceController"/>.</summary>
         protected void EmitServiceInfo(string unitName)
         {
             foreach (var svc in SystemdHelper.GetServices(new[] { unitName }))
@@ -592,7 +597,7 @@ namespace Microsoft.PowerShell.Commands
         SupportsShouldProcess = true,
         HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097053",
         RemotingCapability = RemotingCapability.SupportedByCommand)]
-    [OutputType(typeof(LinuxServiceInfo))]
+    [OutputType(typeof(LinuxServiceController))]
     public sealed class StartServiceCommand : ServiceUnixBase
     {
         /// <inheritdoc/>
@@ -614,7 +619,7 @@ namespace Microsoft.PowerShell.Commands
         SupportsShouldProcess = true,
         HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097051",
         RemotingCapability = RemotingCapability.SupportedByCommand)]
-    [OutputType(typeof(LinuxServiceInfo))]
+    [OutputType(typeof(LinuxServiceController))]
     public sealed class StopServiceCommand : ServiceUnixBase
     {
         /// <inheritdoc/>
@@ -636,7 +641,7 @@ namespace Microsoft.PowerShell.Commands
         SupportsShouldProcess = true,
         HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2096560",
         RemotingCapability = RemotingCapability.SupportedByCommand)]
-    [OutputType(typeof(LinuxServiceInfo))]
+    [OutputType(typeof(LinuxServiceController))]
     public sealed class RestartServiceCommand : ServiceUnixBase
     {
         /// <inheritdoc/>
@@ -661,7 +666,7 @@ namespace Microsoft.PowerShell.Commands
         SupportsShouldProcess = true,
         HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097054",
         RemotingCapability = RemotingCapability.SupportedByCommand)]
-    [OutputType(typeof(LinuxServiceInfo))]
+    [OutputType(typeof(LinuxServiceController))]
     public sealed class SuspendServiceCommand : ServiceUnixBase
     {
         /// <inheritdoc/>
@@ -687,7 +692,7 @@ namespace Microsoft.PowerShell.Commands
         SupportsShouldProcess = true,
         HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097049",
         RemotingCapability = RemotingCapability.SupportedByCommand)]
-    [OutputType(typeof(LinuxServiceInfo))]
+    [OutputType(typeof(LinuxServiceController))]
     public sealed class ResumeServiceCommand : ServiceUnixBase
     {
         /// <inheritdoc/>
@@ -718,7 +723,7 @@ namespace Microsoft.PowerShell.Commands
         SupportsShouldProcess = true,
         HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097055",
         RemotingCapability = RemotingCapability.SupportedByCommand)]
-    [OutputType(typeof(LinuxServiceInfo))]
+    [OutputType(typeof(LinuxServiceController))]
     public sealed class SetServiceCommand : PSCmdlet
     {
         /// <summary>Service name.</summary>
@@ -730,7 +735,7 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>Service object (pipeline input).</summary>
         [Parameter(Mandatory = true, ParameterSetName = "InputObject",
             ValueFromPipeline = true)]
-        public LinuxServiceInfo? InputObject { get; set; }
+        public LinuxServiceController? InputObject { get; set; }
 
         /// <summary>Desired startup type.</summary>
         [Parameter]
@@ -822,7 +827,7 @@ namespace Microsoft.PowerShell.Commands
     [Cmdlet(VerbsCommon.New, "Service", SupportsShouldProcess = true,
         HelpUri = "https://go.microsoft.com/fwlink/?LinkID=2097056",
         RemotingCapability = RemotingCapability.SupportedByCommand)]
-    [OutputType(typeof(LinuxServiceInfo))]
+    [OutputType(typeof(LinuxServiceController))]
     public sealed class NewServiceCommand : PSCmdlet
     {
         /// <summary>Name of the service to create.</summary>
@@ -895,14 +900,14 @@ namespace Microsoft.PowerShell.Commands
                 }
             }
 
-            WriteObject(new LinuxServiceInfo
+            WriteObject(new LinuxServiceController
             {
-                Name        = unitName,
-                DisplayName = string.IsNullOrEmpty(Description) ? Name : Description,
-                Status      = ServiceControllerStatus.Stopped,
-                StartType   = StartupType,
-                ActiveState = "inactive",
-                SubState    = "dead",
+                ServiceName    = unitName,
+                DisplayName   = string.IsNullOrEmpty(Description) ? Name : Description,
+                Status        = ServiceControllerStatus.Stopped,
+                StartType     = StartupType,
+                ActiveState   = "inactive",
+                SubState      = "dead",
             });
         }
     }
